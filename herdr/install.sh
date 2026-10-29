@@ -14,7 +14,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-aarch64) target=aarch64-unknown-linux-gnu ;;
   *) target="" ;;
 esac
-url="https://github.com/ChmaraX/herdr-nvim/releases/download/v${version}/herdr-nvim-${target}"
+url="https://github.com/Zhuxy/herdr-nvim/releases/download/v${version}/herdr-nvim-${target}"
 
 build_from_source() {
   if ! command -v cargo >/dev/null; then
