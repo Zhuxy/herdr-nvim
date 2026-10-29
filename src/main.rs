@@ -10,6 +10,7 @@ mod herdr;
 mod home;
 mod layout;
 mod maneuver;
+mod opener;
 mod openlink;
 mod path;
 mod pathkey;

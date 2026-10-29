@@ -8,11 +8,12 @@ A popup that lists the files the agent touched. Typing searches the whole repo, 
 - fuzzy search: typing searches every repo file (tracked plus untracked, respecting `.gitignore`) by path and name, not by contents. Multi-term and typo-tolerant. Agent-touched files rank first and matches are highlighted.
 - keys: `↑/↓`, `Ctrl+P/N`, `PgUp/PgDn`, `Home/End`, `Ctrl+A/E`, `Ctrl+U` (clear), `Backspace`, `Esc`/`Ctrl+C` (close).
 - open at line: `⏎` closes the popup and opens the file in this tab's sidebar, at the line if one is known, and focuses the sidebar. A closed sidebar is opened; an open one is never toggled shut.
+- open externally: `⇧⏎` closes the popup and hands the file to the OS default application instead (`open` on macOS, `xdg-open` on Linux, `cmd /C start` on Windows). No sidebar, no nvim daemon, no focus change. The picker asks the terminal for unambiguous modified keys (kitty keyboard protocol) so `⇧⏎` is not the same event as `⏎`; where the terminal cannot report it, `⇧⏎` arrives as `⏎` and opens the sidebar.
 - frecency: an existing fff.nvim history is reused for ranking. `picker.frecency=false` turns this off.
 
 ## How to get to it (user POV)
 
-Press `prefix+o` from the agent pane or from any pane in the same tab, the sidebar included. The popup is titled "open file" and shows "N files" ("N matches" while searching) and the footer `↑↓ move · ⏎ open · ^U clear · esc close`.
+Press `prefix+o` from the agent pane or from any pane in the same tab, the sidebar included. The popup is titled "open file" and shows "N files" ("N matches" while searching) and the footer `↑↓ move · ⏎ sidebar · ⇧⏎ open externally · ^U clear · esc close`.
 
 ## Driving it in the box
 
@@ -20,6 +21,7 @@ Press `prefix+o` from the agent pane or from any pane in the same tab, the sideb
 - In a scenario, the `write` tool gives the `new` badge and `edit` gives `+N -M`. Put `delayMs` on the last turn to open the picker while pi is still working; the files touched so far are already listed.
 - Search: with the picker open, `Type "main"`. The counter switches to "N matches". `Ctrl+U` clears. For a large repo use `cd /work` instead of `~/demo`.
 - `Enter` with the sidebar closed opens it. `Ctrl+B` `o` from inside the sidebar, `Down`, `Enter` swaps the file in the open sidebar.
+- `⇧⏎` cannot be typed by VHS (its xterm.js has no kitty keyboard protocol, so herdr never receives a distinct Shift+Enter) and the box has no `xdg-open`, so verify the external-open path on the host, in a kitty/Ghostty/WezTerm terminal. Inside the box the closest path is `box exec <item> -- herdr pane send-keys <picker-pane> shift+enter` while the picker is open: herdr encodes it as a modified key for the picker, and the finisher then fails to find `xdg-open`, leaving the handoff file in `/tmp` (proof the external branch ran, not that a file opened).
 - No agent: `Ctrl+B` `o` in a plain shell. Nothing appears; check `box exec <item> -- herdr plugin log list` for the reason.
 
 ## Gotchas

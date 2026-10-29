@@ -8,7 +8,9 @@
 //! * **Phase 2 (finisher)** — `herdr-nvim pick-file --finish <handoff>`. Spawned
 //!   detached by the picker once the user picks. Ensures the sidebar is open in
 //!   the invoking tab, opens the chosen file in that tab's nvim daemon, focuses
-//!   the sidebar, and deletes the handoff file.
+//!   the sidebar, and deletes the handoff file. When the picker wrote
+//!   `open_external` (`⇧⏎`), the file goes to the OS default application instead
+//!   and nothing in herdr or nvim is touched.
 //!
 //! Only the pure selection rule [`target_agent_pane`] is unit tested; the two
 //! phases are exercised live in Task 4's end-to-end run.
@@ -124,6 +126,7 @@ fn start_pick() -> Result<()> {
     let handoff = Handoff {
         candidates,
         chosen: None,
+        open_external: false,
         workspace: ctx.workspace.clone(),
         tab: ctx.tab.clone(),
         focused_pane: ctx.focused_pane.clone(),
@@ -239,6 +242,14 @@ fn finish_pick(handoff_path: &str) -> Result<()> {
         .candidates
         .get(chosen)
         .with_context(|| format!("handoff chosen index {chosen} out of range"))?;
+
+    // `⇧⏎`: hand the file to the desktop's default application instead of the
+    // sidebar. No herdr or nvim involvement, so nothing else to do here.
+    if handoff.open_external {
+        crate::opener::open_path(&candidate.path)?;
+        cleanup_handoff(handoff_path);
+        return Ok(());
+    }
 
     let ctx = Ctx {
         workspace: handoff.workspace.clone(),

@@ -4,7 +4,8 @@
 //! bridge, renders a framed crossterm overlay of a single flat,
 //! recency-ordered [`Candidate`] list, lets the user fuzzy-filter/navigate/
 //! pick one, writes the chosen index back into the handoff, and spawns a
-//! detached finisher.
+//! detached finisher. `⏎` picks for the nvim sidebar; `⇧⏎` picks for the
+//! desktop's default application (see [`Pick`]).
 //!
 //! The default (empty-query) view shows only session-touched candidates,
 //! capped to `handoff.max_files`; the moment the user types, matching widens
@@ -21,7 +22,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute, queue,
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
     terminal::{
@@ -51,6 +55,11 @@ pub struct Handoff {
     pub candidates: Vec<Candidate>,
     /// Index into `candidates`; written back by the picker on Enter.
     pub chosen: Option<usize>,
+    /// Written back by the picker on `⇧⏎`: the finisher hands the chosen file
+    /// to the OS default application instead of the sidebar. Defaulted so a
+    /// handoff written without the field still parses.
+    #[serde(default)]
+    pub open_external: bool,
     pub workspace: String,
     /// Tab the pick-file action was invoked from; the finisher opens/reuses the
     /// sidebar in this tab.
@@ -62,6 +71,25 @@ pub struct Handoff {
     /// Max entries the default (empty-query) view shows, from
     /// `config.picker.max_files`.
     pub max_files: u32,
+}
+
+/// What the user asked for when they picked the highlighted row.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Pick {
+    /// `⏎` -- open the file in this tab's nvim sidebar (at its line, if known).
+    Sidebar(usize),
+    /// `⇧⏎` -- hand the file to the OS default application instead.
+    System(usize),
+}
+
+/// Whether `key` is the system-open chord (`⇧⏎`) rather than a plain pick.
+///
+/// Needs the terminal to report `Shift+Enter` as its own key, which is why the
+/// picker pushes [`KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES`] before
+/// reading events: on kitty-protocol terminals a plain `Enter` and a `⇧⏎` are
+/// otherwise the same `\r`. Pure, unit tested.
+pub fn is_system_open(key: &KeyEvent) -> bool {
+    key.code == KeyCode::Enter && key.modifiers.contains(KeyModifiers::SHIFT)
 }
 
 /// A candidate that survived filtering, plus how well it matched.
@@ -345,7 +373,7 @@ pub fn picker_cmd() -> Result<()> {
     if fff.is_none() {
         eprintln!("herdr-nvim: fff index failed to initialize; fuzzy fallback tier is empty");
     }
-    if let Some(chosen) = run_overlay(
+    if let Some(pick) = run_overlay(
         &handoff.candidates,
         &handoff.cwd,
         home.as_deref(),
@@ -353,7 +381,12 @@ pub fn picker_cmd() -> Result<()> {
         now,
         fff.as_ref(),
     )? {
+        let (chosen, open_external) = match pick {
+            Pick::Sidebar(index) => (index, false),
+            Pick::System(index) => (index, true),
+        };
         handoff.chosen = Some(chosen);
+        handoff.open_external = open_external;
         let encoded = serde_json::to_string(&handoff)?;
         std::fs::write(&handoff_path, encoded)
             .with_context(|| format!("writing handoff {handoff_path}"))?;
@@ -374,19 +407,33 @@ impl TerminalGuard {
     fn enter() -> Result<Self> {
         enable_raw_mode().context("enabling raw mode")?;
         execute!(io::stdout(), EnterAlternateScreen, Hide).context("entering alternate screen")?;
+        // Ask the terminal to report modified keys unambiguously, so `⇧⏎`
+        // arrives as `Enter` + `SHIFT` instead of a bare `\r`. Best-effort:
+        // a terminal without kitty-protocol support simply keeps collapsing
+        // it, and the chord stays out of reach rather than breaking the picker.
+        let _ = execute!(
+            io::stdout(),
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        );
         Ok(Self)
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = execute!(io::stdout(), Show, LeaveAlternateScreen);
+        let _ = execute!(
+            io::stdout(),
+            PopKeyboardEnhancementFlags,
+            Show,
+            LeaveAlternateScreen
+        );
         let _ = disable_raw_mode();
     }
 }
 
-/// Run the interactive overlay. Returns `Some(index)` into `cands` on Enter,
-/// or `None` if the user dismissed it (Esc/Ctrl-c) or there is nothing to pick.
+/// Run the interactive overlay. Returns the row the user picked (`⏎` for the
+/// sidebar, `⇧⏎` for the OS default application), or `None` if they dismissed
+/// it (Esc/Ctrl-c) or there is nothing to pick.
 fn run_overlay(
     cands: &[Candidate],
     cwd: &str,
@@ -394,7 +441,7 @@ fn run_overlay(
     max_files: u32,
     now: u64,
     fff: Option<&FffIndex>,
-) -> Result<Option<usize>> {
+) -> Result<Option<Pick>> {
     if cands.is_empty() {
         return Ok(None);
     }
@@ -444,7 +491,10 @@ fn run_overlay(
         let last = visible.len().saturating_sub(1);
         match key.code {
             KeyCode::Esc => return Ok(None),
-            KeyCode::Enter => return Ok(visible.get(cursor).map(|m| m.index)),
+            KeyCode::Enter if is_system_open(&key) => {
+                return Ok(visible.get(cursor).map(|m| Pick::System(m.index)))
+            }
+            KeyCode::Enter => return Ok(visible.get(cursor).map(|m| Pick::Sidebar(m.index))),
             KeyCode::Up => cursor = cursor.saturating_sub(1),
             KeyCode::Down => cursor = (cursor + 1).min(last),
             KeyCode::PageUp => cursor = cursor.saturating_sub(viewport),
@@ -576,7 +626,7 @@ fn render(
     }
 
     // Keybind hint on the second-to-last row (one blank bottom-pad row below).
-    let hint = "↑↓ move  ⏎ open  ^u clear  esc close";
+    let hint = "↑↓ move  ⏎ sidebar  ⇧⏎ open externally  ^u clear  esc close";
     queue!(
         out,
         MoveTo(PAD_X, rows.saturating_sub(2)),
@@ -802,6 +852,32 @@ mod tests {
             .iter()
             .map(|c| display_path(&c.path, cwd, None))
             .collect()
+    }
+
+    // --- is_system_open / Handoff ----------------------------------------
+
+    fn key(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn shift_enter_is_the_system_open_chord() {
+        assert!(is_system_open(&key(KeyCode::Enter, KeyModifiers::SHIFT)));
+        assert!(!is_system_open(&key(KeyCode::Enter, KeyModifiers::NONE)));
+        // A shifted character elsewhere is just typed text, not a pick.
+        assert!(!is_system_open(&key(
+            KeyCode::Char('A'),
+            KeyModifiers::SHIFT
+        )));
+    }
+
+    #[test]
+    fn handoff_without_open_external_still_parses() {
+        // A handoff written by an older bridge has no `open_external` key.
+        let json = r#"{"candidates":[],"chosen":null,"workspace":"w1","tab":"w1:t1",
+            "focused_pane":"w1:p1","cwd":"/repo","max_files":20}"#;
+        let handoff: Handoff = serde_json::from_str(json).expect("parses");
+        assert!(!handoff.open_external);
     }
 
     // --- fuzzy_match ------------------------------------------------------

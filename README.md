@@ -21,7 +21,8 @@ https://github.com/user-attachments/assets/9a6092b4-6851-4e47-a4b7-d09fda1f5121
   and pending annotations survive the toggle.
 - **Fuzzy file picker.** It opens on the files your agent touched recently
   (newest first, with diff stats). Type to fuzzy-search the whole repo. `⏎`
-  opens the file in the sidebar at the right line.
+  opens the file in the sidebar at the right line; `⇧⏎` opens it with your
+  system's default application instead.
 - **Code annotations you send to the agent.** Comment lines or a selection
   like a code review. Then send them all to any agent in the workspace (pi,
   claude, codex), with file:line and git context.
@@ -133,6 +134,14 @@ you see.
 
 The default view shows the latest `max_files` entries (20). A typed query is
 uncapped.
+
+`⏎` opens the highlighted file in the sidebar. `⇧⏎` instead hands it to the
+desktop (`open` on macOS, `xdg-open` on Linux, `start` on Windows), so a PDF,
+an image or a Markdown file lands in the app you would double-click it with,
+without touching the sidebar. The chord needs a terminal that reports
+`Shift+Enter` as its own key (kitty, Ghostty, WezTerm, and other terminals
+with the kitty keyboard protocol); where it cannot be told apart from `⏎`, a
+plain `⏎` is what arrives and the file opens in the sidebar as usual.
 
 ## Annotations
 
